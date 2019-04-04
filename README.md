@@ -1,0 +1,1 @@
+# The_Bell_Curve_Critique
