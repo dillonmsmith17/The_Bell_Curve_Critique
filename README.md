@@ -1,1 +1,5 @@
-# The_Bell_Curve_Critique
+# Parental Socioeconomic Status or IQ? An Exploration of Major Determinants of U.S. Poverty
+
+## Abstract
+
+  *The Bell Curve* by Charles Murray and Richard Herrnstein is one of the most controversial academic works of the last few decades. Using data from the National Longitudinal Survey of Youths (1979), we performed a number of regressions of poverty status in 1989 on parental socioeconomic status, IQ, race, sex, and age. We replicate their results which show that IQ is a more important predictor of poverty status than parental socioeconomic status (SES). We extend their analysis to other groupings and find that, while similar, the underlying relationship between the variables and poverty status varies across groups. We then compared ratios of the percentage of the top 25% to bottom 25% of either IQ or parental SES in poverty. We found that parental SES had three times the predictive power as SES for black respondents and twice the predictive power for Hispanic respondents over whites, also finding a greater proportion of respondents in poverty at all levels for minority groups than for white respondents with a similar relationship for females compared to males.
