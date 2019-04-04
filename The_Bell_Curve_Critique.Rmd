@@ -1,0 +1,657 @@
+---
+title: "Parental Socioeconomic Status or IQ? An Exploration of Major Determinants of
+  U.S. Poverty"
+author: "Dillon M. Smith"
+date: "4/30/2018"
+output: 
+  pdf_document:
+    fig_caption: TRUE
+bibliography: bibliography.bib
+---
+
+```{r setup, include=FALSE}
+# load necessary libraries
+library(broom)
+library(stargazer)
+library(fs)
+library(knitr)
+library(kableExtra)
+library(Amelia)
+library(zeligverse)
+library(tidyverse)
+
+# set document code chunk defaults
+opts_chunk$set(echo = FALSE,
+               message = FALSE,
+               error = FALSE,
+               warning = FALSE)
+```
+
+```{r, message=FALSE}
+## Using some borrowed code from professor Kane, we will create a clean data set consisting of the NLS website data and the Rasmusen website data. This code chunk wrestles with the NLS data.
+
+nls <- read_csv("default.csv") %>%       ## Might want to read in the columns by type for safety reasons
+  rename(version_r26 = A0002600,
+        caseid = R0000100,               ## ID variable, VERY IMPORTANT TO JOIN DATAFRAMES
+        hgc.mother = R0006500,
+        job.mother = R0006900,
+        hgc.father = R0007900,
+        job.father = R0008300,
+        ethnicity = R0009600,
+        sample.cat = R0173600,
+        race = R0214700,
+        sex = R0214800,
+        tnfi.trunc = R0217900,
+        afqt.2 = R0618300,
+        pov.87 = R2870400,
+        pov.88 = R3074100,
+        pov.89 = R3400800,             ## This is for survey year 1990, but called 1989
+        pov.90 = R3656200,
+        
+        esr.89 = R3074300,             ## Year in name usually means the survey year
+        esr.90 = R3401000) %>% 
+  mutate_all(funs(ifelse(. < 0, NA, .))) %>% ## setting negative values to be equal to NA
+  mutate(race = as.factor(case_when(race == 1 ~ "Hispanic",
+                          race == 2 ~ "Black",
+                          race == 3 ~ "White"))) %>%
+  mutate(sex = as.factor(case_when(sex == 1 ~ "male",
+                         sex == 2 ~ "female"))) %>%
+  mutate(pov.87 = as.logical(pov.87)) %>%  
+  mutate(pov.88 = as.logical(pov.88)) %>% 
+  mutate(pov.89 = as.logical(pov.89)) %>% 
+  mutate(pov.90 = as.logical(pov.90)) %>% 
+  mutate(income = log(tnfi.trunc + 1))
+```
+
+```{r, message=FALSE}
+## Here, we read in Data from The Bell Curve Webpage. This data comes from Eric Rasmusen's [cite](http://www.rasmusen.org/xpacioli/bellcurve/bellcurve.htm).
+
+tbc <- read_delim("NATION.TXT", 
+                  delim = "\t", 
+                  col_names = read_lines("var_names.txt") %>% str_trim(), 
+                  na = c("\xa5", "")) %>% 
+  mutate(wed.by.30 = case_when(WedBy30 == "1 Yes"  ~ TRUE,
+                               WedBy30 == "2 No"  ~ FALSE),
+         Pov89 = as.logical(Pov89))
+tbc$Race4 <- as.factor(tbc$Race4)
+tbc$Sex <- as.factor(tbc$Sex)
+tbc$Adult14B <- as.factor(tbc$Adult14B)
+tbc$Adult14S <- as.factor(tbc$Adult14S)
+tbc$BA_Atta <- as.factor(tbc$BA_Atta)
+tbc$FinDegre <- as.factor(tbc$FinDegre)
+tbc$GEDvHSGr <- as.factor(tbc$GEDvHSGr)
+tbc$EdSample <- as.factor(tbc$EdSample)
+tbc$Health89 <- as.factor(tbc$Health89)
+tbc$LTHSvAl <- as.factor(tbc$LTHSvAl)
+tbc$LTHSvGED <- as.factor(tbc$LTHSvGED)
+tbc$LTHSvHS <- as.factor(tbc$LTHSvHS)
+tbc$Occ90Typ <- as.factor(tbc$Occ90Typ)
+tbc$RelAtt <- as.factor(tbc$RelAtt)
+tbc$Sample <- as.factor(tbc$Sample)
+tbc$Wed90 <- as.factor(tbc$Wed90)
+```
+
+
+```{r}
+## we now use left_join to join the LNLS and TBC data frames, and use stopifnot to make sure the left_join worked properly.
+
+x <- left_join(nls, tbc, by = c("caseid" = "ID"))
+
+stopifnot(all.equal(is.na(x$Pov89), is.na(x$pov.89)))   ## Poverty 1989 has same NAs
+stopifnot(all(x$race[x$Race4 == "White"] == "White"))   ## Whites for TBC = Whites for NLS
+```
+
+```{r, include=FALSE}
+## we now have to tidy the data by filtering out NA's and keeping the various variables/observations we need to perform analysis of the data. We use drop_na to get rid of observations with NA's for zIQYr89, zSES, and zAge and select the necessary variables for analysis (caseid, Race4, zIQYr89, zSES, zAge, Pov89, pov.89, Wgt90, esr.89, esr.90, sample.cat). We then use mutate to form a new variable for SES and IQ breaking up the original variables into the five categories Murray uses in his analysis. We do not filter for white only at this point because the graphic we are making will consist of one graph for each racial category. Because the replication tables are not necessary here, we do not need to make the weighted mean variables and put them in a table.
+
+y <- x %>% 
+  select(caseid, 
+         Race4,
+         sex,
+         zIQYr89, 
+         zSES, 
+         zAge, 
+         Pov89, 
+         pov.89, 
+         Wgt90, 
+         esr.89, 
+         esr.90, 
+         sample.cat) %>% 
+  drop_na(zIQYr89, 
+          zSES, 
+          zAge) %>% 
+  mutate(zAge = (zAge - mean(zAge))/sd(zAge)) %>% 
+  mutate(`Cognitive Class` = cut(zIQYr89,
+                                 breaks = c(-5, 
+                                            -1.64485, 
+                                            -0.67449, 
+                                            0.67449, 
+                                            1.64485, 
+                                            5),
+                                 labels = c("Very Dull", 
+                                            "Dull", 
+                                            "Normal", 
+                                            "Bright", 
+                                            "Very Bright"),
+                                 include.lowest = TRUE,
+                                 ordered_result = TRUE)) %>% 
+  arrange(desc(`Cognitive Class`)) %>% 
+  mutate(`Parents' Socioeconomic Class` = cut(zSES,
+                                              breaks = c(-5,
+                                                         -1.64485,
+                                                         -0.67449, 
+                                                         0.67449, 
+                                                         1.64485, 
+                                                         5), 
+                                              labels = c("Very Low", 
+                                                         "Low", 
+                                                         "Mid", 
+                                                         "High", 
+                                                         "Very High"),
+                                              include.lowest = TRUE,
+                                              ordered_result = TRUE)) %>%
+  filter(! esr.89 %in% c(5)) %>% 
+  filter(! esr.90 %in% c(5))
+```
+
+``` {r}
+## Here we filter out for individual races/affinity groups to make the data sets used for the regression tables in the paper
+
+wht_data <- y %>% 
+  filter(Race4 == "White") %>% 
+  drop_na(Pov89, 
+          esr.89, 
+          esr.90) %>% 
+  filter(sample.cat %in% c(1:8))
+
+blk_data <- y %>% 
+  filter(Race4 == "Black") %>% 
+  drop_na(Pov89, 
+          esr.89, 
+          esr.90) %>% 
+  filter(sample.cat %in% c(1:8))
+
+hisp_data <- y %>% 
+  filter(Race4 =="Hisp") %>% 
+  drop_na(Pov89, 
+          esr.89, 
+          esr.90) %>% 
+  filter(sample.cat %in% c(1:8))
+
+wb_data <- y %>% 
+  filter(Race4 == "White" | Race4 == "Black") %>% 
+  drop_na(Pov89, 
+          esr.89, 
+          esr.90)
+  
+wh_data <- y %>% 
+  filter(Race4 == "White" | Race4 == "Hisp") %>% 
+  drop_na(Pov89, 
+          esr.89, 
+          esr.90)
+
+mf_data <- y %>% 
+  drop_na(Pov89, 
+          esr.89, 
+          esr.90)
+
+male_data <- y %>% 
+  filter(sex == "male") %>% 
+  drop_na(Pov89, 
+          esr.89, 
+          esr.90) %>% 
+  filter(sample.cat %in% c(1:8))
+
+female_data <- y %>% 
+  filter(sex == "female") %>% 
+  drop_na(Pov89, 
+          esr.89, 
+          esr.90) %>% 
+  filter(sample.cat %in% c(1:8))
+
+all_data <- y %>% 
+  drop_na(Pov89, 
+          esr.89, 
+          esr.90) %>% 
+  filter(sample.cat %in% c(1:8))
+```
+
+```{r}
+yyw <- y %>% 
+  filter(Race4 == "White")
+
+yyb <- y %>% 
+  filter(Race4 == "Black")
+
+yyh <- y %>% 
+  filter(Race4 == "Hisp")
+
+yym <- y %>% 
+  filter(sex == "male")
+
+yyf <- y %>% 
+  filter(sex == "female")
+```
+
+```{r, results = "hide"}
+## Published results for IQ
+
+y2 <- y %>% 
+  filter(Race4 == "White") %>% 
+  group_by(`Cognitive Class`) %>% 
+  summarize(`Percentage in Poverty` = 100 * weighted.mean(Pov89,
+                                                    w = Wgt90,
+                                                    na.rm = TRUE),
+            N = n()) %>% 
+  arrange(desc(`Cognitive Class`)) %>% 
+  add_row(`Cognitive Class` = "Sample",
+          N = nrow(yyw),
+          `Percentage in Poverty` = 100 * weighted.mean(y$Pov89,
+                                                  w = y$Wgt90,
+                                                  na.rm = TRUE)) %>% 
+  add_column(Published = c(2, 3, 6, 16, 30, 7)) %>% 
+  as.data.frame()
+```
+
+```{r, results = "hide"}
+## Published results for SES
+
+y3 <- y %>% 
+  filter(Race4 == "White") %>% 
+  group_by(`Parents' Socioeconomic Class`) %>%
+  summarize(`Percentage in Poverty` = 100 * weighted.mean(Pov89, 
+                                                    w = Wgt90,
+                                                    na.rm = TRUE),
+            N = n()) %>% 
+  arrange(desc(`Parents' Socioeconomic Class`)) %>% 
+  add_row(`Parents' Socioeconomic Class` = "Sample",
+          N = nrow(yyw),
+          `Percentage in Poverty` = 100 * weighted.mean(y$Pov89,
+                                                  w = y$Wgt90,
+                                                  na.rm = TRUE)) %>% 
+  add_column(Published = c(3, 3, 7, 12, 24, 7)) %>% 
+  as.data.frame()
+```
+
+```{r}
+## Summary statistics for other affinity groups (Cognitive Class)
+
+y2w <- y %>% 
+  filter(Race4 == "White") %>% 
+  group_by(`Cognitive Class`) %>% 
+  summarize(`Pctg. (W)` = 100 * weighted.mean(Pov89,
+                                                    w = Wgt90,
+                                                    na.rm = TRUE)) %>% 
+  arrange(desc(`Cognitive Class`)) %>% 
+  as.data.frame()
+
+y2b <- y %>% 
+  filter(Race4 == "Black") %>% 
+  group_by(`Cognitive Class`) %>% 
+  summarize(`Pctg. (B)` = 100 * weighted.mean(Pov89,
+                                                    w = Wgt90,
+                                                    na.rm = TRUE)) %>% 
+  arrange(desc(`Cognitive Class`)) %>% 
+  as.data.frame()
+
+y2h <- y %>% 
+  filter(Race4 == "Hisp") %>% 
+  group_by(`Cognitive Class`) %>% 
+  summarize(`Pctg. (H)` = 100 * weighted.mean(Pov89,
+                                                    w = Wgt90,
+                                                    na.rm = TRUE)) %>% 
+  arrange(desc(`Cognitive Class`)) %>% 
+  as.data.frame()
+
+y2m <- y %>% 
+  filter(sex == "male") %>% 
+  group_by(`Cognitive Class`) %>% 
+  summarize(`Pctg. (M)` = 100 * weighted.mean(Pov89,
+                                                    w = Wgt90,
+                                                    na.rm = TRUE)) %>% 
+  arrange(desc(`Cognitive Class`)) %>% 
+  as.data.frame()
+
+y2f <- y %>% 
+  filter(sex == "female") %>% 
+  group_by(`Cognitive Class`) %>% 
+  summarize(`Pctg. (F)` = 100 * weighted.mean(Pov89,
+                                                    w = Wgt90,
+                                                    na.rm = TRUE)) %>% 
+  arrange(desc(`Cognitive Class`)) %>% 
+  as.data.frame()
+
+y2a <- left_join(y2w, y2b, by = "Cognitive Class")
+y2a <- left_join(y2a, y2h, by = "Cognitive Class")
+y2a <- left_join(y2a, y2m, by = "Cognitive Class")
+y2a <- left_join(y2a, y2f, by = "Cognitive Class")
+```
+
+```{r}
+## Summary statistics for other affinity groups (parental SES)
+
+y3w <- y %>% 
+  filter(Race4 == "White") %>% 
+  group_by(`Parents' Socioeconomic Class`) %>%
+  summarize(`Pctg. (W)` = 100 * weighted.mean(Pov89, 
+                                                    w = Wgt90,
+                                                    na.rm = TRUE)) %>% 
+  arrange(desc(`Parents' Socioeconomic Class`)) %>% 
+  as.data.frame()
+
+y3b <- y %>% 
+  filter(Race4 == "Black") %>% 
+  group_by(`Parents' Socioeconomic Class`) %>%
+  summarize(`Pctg. (B)` = 100 * weighted.mean(Pov89, 
+                                                    w = Wgt90,
+                                                    na.rm = TRUE)) %>% 
+  arrange(desc(`Parents' Socioeconomic Class`)) %>% 
+  as.data.frame()
+
+y3h <- y %>% 
+  filter(Race4 == "Hisp") %>% 
+  group_by(`Parents' Socioeconomic Class`) %>%
+  summarize(`Pctg. (H)` = 100 * weighted.mean(Pov89, 
+                                                    w = Wgt90,
+                                                    na.rm = TRUE)) %>% 
+  arrange(desc(`Parents' Socioeconomic Class`)) %>% 
+  as.data.frame()
+
+y3m <- y %>% 
+  filter(sex == "male") %>% 
+  group_by(`Parents' Socioeconomic Class`) %>%
+  summarize(`Pctg. (M)` = 100 * weighted.mean(Pov89, 
+                                                    w = Wgt90,
+                                                    na.rm = TRUE)) %>% 
+  arrange(desc(`Parents' Socioeconomic Class`)) %>% 
+  as.data.frame()
+
+y3f <- y %>% 
+  filter(sex == "female") %>% 
+  group_by(`Parents' Socioeconomic Class`) %>%
+  summarize(`Pctg. (F)` = 100 * weighted.mean(Pov89, 
+                                                    w = Wgt90,
+                                                    na.rm = TRUE)) %>% 
+  arrange(desc(`Parents' Socioeconomic Class`)) %>% 
+  as.data.frame()
+
+y3a <- left_join(y3w, y3b, by = "Parents' Socioeconomic Class")
+y3a <- left_join(y3a, y3h, by = "Parents' Socioeconomic Class")
+y3a <- left_join(y3a, y3m, by = "Parents' Socioeconomic Class")
+y3a <- left_join(y3a, y3f, by = "Parents' Socioeconomic Class")
+```
+
+```{r}
+## Here we are creating the regressions used to make the regression output chart in the "Results" section
+
+wht_mod <- glm(data = wht_data, Pov89 ~ zIQYr89 + zSES + zAge, family = "binomial")
+blk_mod <- glm(data = blk_data, Pov89 ~ zIQYr89 + zSES + zAge, family = "binomial")
+hisp_mod <- glm(data = hisp_data, Pov89 ~ zIQYr89 + zSES + zAge, family = "binomial")
+male_mod <- glm(data = male_data, Pov89 ~ zIQYr89 + zSES + zAge, family = "binomial")
+female_mod <- glm(data = female_data, Pov89 ~ zIQYr89 + zSES + zAge, family = "binomial")
+all_mod <- glm(data = all_data, Pov89 ~ zIQYr89 + zSES + zAge, family = "binomial")
+
+all_data <- all_data %>% 
+  filter(Race4 != "Other")
+
+wb_mod <- glm(data = wb_data, Pov89 ~ zIQYr89 + zSES + Race4*zIQYr89 + Race4*zSES + zAge, family = "binomial")
+wh_mod <- glm(data = wh_data, Pov89 ~ zIQYr89 + zSES + Race4*zIQYr89 + Race4*zSES + zAge, family = "binomial")
+wbh_mod <- glm(data = all_data, Pov89 ~ zIQYr89 + zSES + Race4 + zAge, family = "binomial")
+mf_mod <- glm(data = mf_data, Pov89 ~ zIQYr89 + zSES + sex*zIQYr89 + sex*zSES + zAge, family = "binomial")
+
+wbhmf_mod <- glm(data = all_data, Pov89 ~ zIQYr89 + zSES + Race4 + sex + zAge, family = "binomial")
+```
+
+```{r}
+## Here we are creating the data sets to be used in the graphics populating the "Results" section of the article using regressions of zIQYr89/zSES on the Pov89 variable for each data set.
+
+lm_iq_w <- glm(data = wht_data, Pov89 ~ zIQYr89, family = "binomial")
+lm_ses_w <- glm(data = wht_data, Pov89 ~ zSES, family = "binomial")
+wht_data$pred.iq <- fitted(lm_iq_w)
+wht_data$pred.ses <- fitted(lm_ses_w)
+
+lm_iq_b <- glm(data = blk_data, Pov89 ~ zIQYr89, family = "binomial")
+lm_ses_b <- glm(data = blk_data, Pov89 ~ zSES, family = "binomial")
+blk_data$pred.iq <- fitted(lm_iq_b)
+blk_data$pred.ses <- fitted(lm_ses_b)
+
+lm_iq_h <- glm(data = hisp_data, Pov89 ~ zIQYr89, family = "binomial")
+lm_ses_h <- glm(data = hisp_data, Pov89 ~ zSES, family = "binomial")
+hisp_data$pred.iq <- fitted(lm_iq_h)
+hisp_data$pred.ses <- fitted(lm_ses_h)
+
+lm_iq_m <- glm(data = male_data, Pov89 ~ zIQYr89, family = "binomial")
+lm_ses_m <- glm(data = male_data, Pov89 ~ zSES, family = "binomial")
+male_data$pred.iq <- fitted(lm_iq_m)
+male_data$pred.ses <- fitted(lm_ses_m)
+
+lm_iq_f <- glm(data = female_data, Pov89 ~ zIQYr89, family = "binomial")
+lm_ses_f <- glm(data = female_data, Pov89 ~ zSES, family = "binomial")
+female_data$pred.iq <- fitted(lm_iq_f)
+female_data$pred.ses <- fitted(lm_ses_f)
+```
+
+# Abstract
+
+  *The Bell Curve* by Charles Murray and Richard Herrnstein is one of the most controversial academic works of the last few decades. Using data from the National Longitudinal Survey of Youths (1979), we performed a number of regressions of poverty status in 1989 on parental socioeconomic status, IQ, race, sex, and age. We replicate their results which show that IQ is a more important predictor of poverty status than parental socioeconomic status (SES). We extend their analysis to other groupings and find that, while similar, the underlying relationship between the variables and poverty status varies across groups. We then compared ratios of the percentage of the top 25% to bottom 25% of either IQ or parental SES in poverty. We found that parental SES had three times the predictive power as SES for black respondents and twice the predictive power for Hispanic respondents over whites, also finding a greater proportion of respondents in poverty at all levels for minority groups than for white respondents with a similar relationship for females compared to males.
+
+# Introduction
+
+  The link between IQ, race, and socioeconomic status has long been the subject of heated debate. In 1969, Arthur Jensen became a pariah in the world of psychometrics when he posited that the War on Poverty was ineffective because it focused on children with low IQs, that IQ is incredibly heritable, that IQ was a large determinant of school success, and that the percentage of black children in these groups was higher than other races suggesting that blacks have, in general, lower IQs than other racial groups.[^1] In 1971, one of the authors of this article, Richard Herrnstein, proposed that since IQ is heritable and economic success is in part based on IQ, since social standing is in part based on economic success, social standing can be somewhat attributable to genetic differences.[^2] Articles such as these, among others, found the author’s argument—-that in today’s society, a social stratification across cognitive abilities is present and is growing, that cognitive ability is not equally normally distributed across ethnic groups, and that if unchecked, this stratification will set America on a path leading to a caste system in which genetic differences in cognitive ability make social mobility impossible. There may not be a work published in the recent past surrounded by as much controversy as Charles Murray and Richard Herrnstein’s *The Bell Curve*.[^3] In the political arena, the book has received much defense from the far right and is used as a defense for a number of controversial policy propositions, while the left attacks it as racist and sexist. Academically, criticisms of the work have ranged from calling it pseudo-science to accusing the authors of altering their data/methods to find a predetermined outcome based in racial and gender biases. Furthermore, in publishing their book, Herrnstein, Murray, and their publishers circumvented the peer review process, much to the dismay of academics such as Arthur S. Goldberger and Charles F. Manski, who claim that “a process of scientific review is now under way. But, given the process to date, peer review of The Bell Curve is now an exercise in damage control rather than prevention”[^4]. The peer review process is a particularly important safeguard protecting pseudo-science from being considered science, and addressing biases in potentially inflammatory findings in works like *The Bell Curve*. Going above this crucially important step of the scientific process has exacerbated the debate surrounding the issues associated with the book as well as its findings, implications, and policy recommendations, and it has contributed to the skepticism and reservation with which one reads, analyzes, and critiques this book.
+
+  The data used for the correlations the authors find comes from the National Longitudinal Survey of Youth (NLSY), a survey containing data on American youths aged 14 to 22 and their childhood environment, parental socioeconomic status, educational/occupational achievement, work history, family composition, and cognitive skills, of 1979 and follow up information from 1989. The data contains information on 12,686 respondents of varying racial, ethnic, and gender identities, socioeconomic status, geographical location, and age. The levels for race within the data are "White", "Black", "Hispanic", and "Other". IQ is calculated by normalizing scores on the Air Force Qualification Test (AFQT), a useful proxy as long as age is incorporated into the analysis to account for time-fixed effects. Summary statistics are given in the form of five classes--very dull, dull, mid, high, and very high for cognitive class and very low, low, mid, high, and very high for parental socioeconomic status (we use the same terminology as Murray and Herrnstein for consistency)--determined by percentiles: 1-5, 5-25, 25-75, 75-95, and 95-100, respectively. Results are reported in the form of regression analysis, by using an independent variable (here IQ and parental socioeconomic status) to explain a dependent variable (here poverty) in a logit regression. Murray and Herrnstein, however, limit their analysis to respondents who identify as non-Latino white, as they believe this emphasizes that IQ affects social behaviors across racial and ethnic boundaries.
+  
+  In our analysis, we will be focusing on Part II: "Cognitive Classes and Social Behavior", and more specifically within this section, chapter 5 in which the authors look at the relationship between IQ, parental socioeconomic status, and poverty. Murray and Herrnstein argue that differences in cognitive ability are, essentially, at the root of the most prevalent issues facing American society--that high IQs are generally correlated with socially desirable behaviors, while the opposite is true for low IQs. In general, however, the correlation for behaviors discussed is always less than twenty percent and usually below ten percent. When focusing this general relationship more specifically onto the topic of poverty, Murray and Herrnstein argue that much literature has been produced supporting the hypothesis that being born to economically unfortunate households increases one’s likelihood of falling on the lower end of the socioeconomic spectrum, but that low intelligence is a far more reliable predictor of socioeconomic status, as the data they use indicated those in the very low category are fifteen times more likely than those in the very high category to be poor. Their empirical data contains evidence that the advantages of "being born smart" outweigh those of being born rich, and even with confounding variables like sex and marital status, intelligence remains the most important predictor.
+
+```{r, results='asis'}
+stargazer(y3, 
+          summary = FALSE, 
+          header = FALSE, 
+          title = "White Poverty by Parents’ Socioeconomic Class", 
+          digits = 1, 
+          notes = "\\parbox[t]{14cm}{The National Longitudinal Survey of Youth 1979 (NLSY) contained information on 6340 individuals who identified their race as white. This table shows the weighted means weighted on Wgt90 for six groups. The groups are determined based on z-scores of parental socioeconomic status, with those from percentiles 100-95 being `Very High`, 95-75 being `High`, 75-25 being `Mid`, 25-5 being `Low`, 5-0 being `Very Low`, and the overall average being `Sample`. The column titled `Percentage in Poverty` consists of the numbers we calculated from the data while the column titles `Published` consists of the numbers published by Herrnstein and Murray (pg. 131).}", 
+          notes.append = TRUE)
+```
+
+```{r, results='asis'}
+stargazer(y2, 
+          summary = FALSE, 
+          header = FALSE, 
+          title = "White Poverty by Cognitive Class", 
+          digits = 1, 
+          notes = "\\parbox[t]{12cm}{The National Longitudinal Survey of Youth 1979 (NLSY) contained information on 6340 individuals who identified their race as white. This table shows the weighted means weighted on Wgt90 for six groups. The groups are determined based on z-scores of IQ based on performance on the 1989 AFQT, with those from percentiles 100-95 being `Very Bright`, 95-75 being `Bright`, 75-25 being `Mid`, 25-5 being `Dull`, 5-0 being `Very Dull`, and the overall average being `Sample`. The column titled `Percentage in Poverty` consists of the numbers we calculated from the data while the column titles `Published` consists of the numbers published by Herrnstein and Murray (pg. 132).}", 
+          notes.append = TRUE)
+```
+
+  The regression performed by Herrnstein and Murray uses three independent explanatory variables--zAFQT89, zSES, and zAGE, normalized versions of the variables for 1989 score on the AFQT, parental socioeconomic status, and age of the NLSY respondent on December 30, 1990--and one binary dependent variable--whether or not the individual was below the poverty line in 1990. The model used is 
+
+$$logit(\varphi) = log(\varphi/(1-\varphi)) = \alpha + \beta'x $$
+
+in which $\alpha$ is the constant intercept and $\beta$' is the vector of slope coefficients for the aforementioned independent variables. The regression also excludes those who identifies in the survey that they were out of the labor force in 1989 or 1990 because they were in school. Tables 1 and 2 compare the results we found under the same parameters to the results Murray and Herrnstein describe for SES and IQ, respectively, on pages 131 and 132 in *The Bell Curve*.
+
+  A wealth of literature has been produced since the publishing of *The Bell Curve* exploring the complexities of the relationship between IQ, parental socioeconomic status, race, and poverty rates. In their 2000 article, Charles R. Tittle and Thomas Rotolo argue that the relationship between IQ and income is not a temporal relationship, but rather is due to other factors including increased prevalence of written tests amongst occupations perceived as "prestigious", and further IQ is not linked to the negative social behaviors Murray and Herrnstein explore.[^5] In 2003, Eric Turkheimer et. al. found that the relationship between IQ, commonly thought of as mostly heritable, and one's environment is significantly different at opposing sides of the socioeconomic spectrum, with roughly 60% of low SES individuals' IQ variance being explained by environmental factors and minimal variance explained by genetics, while the opposite was truee for high SES individuals.[^6] Anna Firkowska-Mankiewicz and Jerzyna Słomczyńska, in 2002, found that IQ was a relatively good predictor of future life success using data from a Warsaw panel conducted over the mid to late twentieth century, noting difficulty separating IQ effects and those of environmental correlates.[^7] Looking at SES, Leandro Carvalho's 2012 article found that there is an intergenerational correlation of socioeconomic status, and roughly one third of said correlation comes from childhood health and nutrition, cognitive and noncognitive abilities, and early schooling.[^8] In a 1995 review article, M. Corcoran found that after observing several main theories of intergenerational poverty, the economic resources model, that parental socioeconomic status as a consistent indicator of future success, was the most reliable.[^9] In 2004, Kelly Musick and Robert D. Mare, also using NLSY data, found that the then-current rate of intergenerational poverty was insignificant in relation to the recent polarization of socioeconomic classes.[^10]
+
+```{r, results='asis'}
+stargazer(y3a, 
+          summary = FALSE, 
+          header = FALSE, 
+          title = "All Poverty by Parents’ Socioeconomic Class", 
+          digits = 1,
+          notes = "\\parbox[t]{16cm}{The data used to calculate these percentages comes from the NLSY 1979 survey used to calculate the percentages in tables 1 and 2. Socioeconomic class was determined by normalizing reported combined parental income so that the data had a mean of 0 and standard deviation of 1, and then splitting the data into five categories determined by percentiles (in parentheses): very high (100-95), high (95-75), mid (75-25), low (25-5), and very low (5-0). Percentage of each group in poverty is reported for whites, blacks, Hispanics, men, and women using the same weighted mean formula used to calculate the percentages in table 1. Each column has 6430 observations, 2964 observations, 1792 observations, 5887 observations, and 5818 observations, respectively.}")
+## Ratios(H:L): White = 0.178125, Black = 0.3027027, Hisp = 0.26211454, Male = 0.1369863, Female = 0.15384615
+```
+
+```{r, results='asis'}
+stargazer(y2a, 
+          summary = FALSE, 
+          header = FALSE, 
+          title = "All Poverty by Cognitive Class", 
+          digits = 1,
+          notes = "\\parbox[t]{14cm}{The data used to calculate these percentages comes from the NLSY 1979 as in tables 1, 2, and 3. Cognitive class was determined by normalizing scores on the Armed Forces Qualification Test (AFQT), the proxy used by Murray and Herrnstein for IQ, so that the data had a mean of 0 and standard deviation of 1, and then splitting the data into five categories determined by percentiles (in parentheses): very bright (100-95), bright (95-75), mid (75-25), dull (25-5), and very dull (5-0). Percentage of each group in poverty is reported for whites, blacks, Hispanics, men, and women using the same weighted mean formula used to calculate the percentages in table 2. Each column has 6430 observations, 2964 observations, 1792 observations, 5887 observations, and 5818 observations, respectively.}")
+## Ratios(H:L): White = 0.12114537, Black = 0.06468305, Hisp = 0.08283133, Male = 0.07847534, Female = 0.10095012
+```  
+
+  The goal of this essay is to disentangle the effects of race and explore the relationship the authors find, addressing the erroneous assumption made by the authors ignoring the potential for omitted variable bias associated with a homogeneous dataset and invalid projections of the coefficients found within the data on non-Latino whites onto other racial, ethnic, and gender groups within the survey. In their introduction, the authors explain that their argument is, essentially, founded on six guiding principles: that a general factor of cognitive ability exists and is different across people, aptitude/achievement tests somewhat measure this factor, but IQ tests designed to do so are most accurate, IQ scores match what people generally mean by the words “intelligent” or “smart”, IQ scores are more or less stable across one’s life, properly administered IQ tests display no inherent socioeconomic, ethnic, or racial biases, and cognitive ability has a heritability between 40 and 80 percent. However, the validity of their penultimate assumption is questionable at best, given the wealth of literature available supporting the existence of inherent socioeconomic, ethnic, racial, and gender-based biases in IQ tests. Our analysis, however, eliminates these biases since by disaggregating the data into separate groups for white, black, Hispanic, and other respondents as well as male and female respondents, the inherent biases within each group on which separate analyses are performed are uniform and thus the assumption, within each group, is valid.
+  
+  Tables 3 and 4 provide summary statistics of our data--the percentage of respondents within each socioeconomic and cognitive class in poverty, respectively. Comparing each class for each racial group, we see that white respondents have lower rates of poverty across both parental socioeconomic status and IQ, other than for the top five percentiles of cognitive class. For comparisons across gender, we see that a similar relationship exists between men and women, with men having lower poverty rates at all levels of IQ and parental SES. Furthermore, the calculated ratios of predictive power of IQ to the predictive power of parental socioeconomic status are 0.6801 for whites, 0.2137 for blacks, 0.3160 for Hispanics, 0.5729 for males, and 0.6562 for females. This phenomenon suggests that the predictive power of SES is much stronger for black and Hispanic respondents than it is for whites, but also suggests that the relationship between parental SES and IQ for men and women is similar. These observations, and their implications, are consistent with the data depicted in the tables.
+
+# Methods
+
+  Given the issues associated with assuming the same relationship for other racial groups between IQ and falling below the poverty line as well as parental socioeconomic status and falling below the poverty line for white respondents--and more broadly the issues associated in general with applying the results of one regression to a group of individuals outside of the data set--we have opted to perform six regressions and create six graphical representations of our findings, exploring the above relationships. Given the inherent race and gender-based biases in IQ tests as they are currently administered (and as they were administered in 1979), the six regressions are for data sets focusing on the following individuals: white NLSY participants, black NLSY participants, Hispanic NLSY participants, male NLSY participants, female NLSY participants, and all NLSY participants. Examining the relationship between each explanatory variable within each individual group allows us to account for racial, ethnic, and gender biases but in the implementation and content of IQ exams, and in barriers from opportunities that are the same for all members of a given racial, ethnic, or gender group.
+  
+  The data set used in this essay is formed using two primary sources, the first being the National Longitudinal Study Website[^11] and the second being a website made by Eric Rasmusen of Indiana University containing copies of the files manipulated and provided by Charles Murray which he used to perform his and Herrnstein's original analysis in *The Bell Curve*.[^12] Combining both data sets, we then tidied the data to the point where it was manageable by removing NA's, selected the necessary variables for the subsequent analysis, and created six individual data sets for the sex regressions/graphics mentioned above. The important variable codes we use are zIQYr89, zSES, zAge, Pov89, and sample.cat which, respectively, are z-scores of respondent's IQs based on the AFQT, z scores for parental socioeconomic status, z scores for age as of December 30, 1990, a binary variable for whether or not a respondent was in poverty in 1989 from the TBC archive, and an indicator for the sample category for an individual in which the main cross section is 1 through 8. The graph/regression for white respondents has `r nrow(wht_data)` observations, for black respondents has `r nrow(blk_data)` observations, for hispanic respondents has `r nrow(hisp_data)` observations, for male respondents has `r nrow(male_data)` observations, for female respondents has `r nrow(female_data)` observations, and for all respondents has `r nrow(all_data)` observations.
+  
+  For each regression we will analyze in the following section, we performed a logit regression of zIQYr98, zSES, and zAge on the Pov89 variable. As before, the regression model used is 
+  
+$$logit(\varphi) = log(\varphi/(1-\varphi)) = \alpha + \beta'x $$
+
+where $\alpha$ is the constant intercept and $\beta$' is the vector of slope coefficients for the aforementioned independent variables.
+
+  In order to form the trendlines presented later in the graphics, we created two new variables in each of the data sets for racial/ethnic/gender groups for the fitted value of probability of being in poverty for a given zSES score and zIQYr89 score by performing a logit regression of the same form of either zSES or zIQYr89 on Pov89. We also perform another set of regressions including the aforementioned variables as well as dummy variables and interaction terms for each racial/ethnic group and gender category to determine the significance of the differing coefficients. We then superimpose the five trend lines, one for each affinity group, onto two graphs, one for zSES and one for zIQYr89, exploring the differences in probabilities of being in poverty for an individual of each group with an identical z-score in either category.
+
+# Results
+
+```{r, results='asis'}
+stargazer(wb_mod, 
+          wh_mod,
+          wbh_mod,
+          mf_mod,
+          wbhmf_mod,
+          type = "latex",
+          title = "Regression of Poverty on IQ, SES and Age",
+          column.labels = c("White/Black", "White/Hispanic", "White/Black/Hispanic", "Male/Female", "All"),
+          covariate.labels = c("IQ", "SES", "Hisp", "White", "Male", "Age", "IQ*White", "SES*White", "IQ*Male", "SES*Male", "Constant"),
+          header = FALSE,
+          notes = "\\parbox[t]{14cm}{This table reports regression results for a number of logit regressions exploring the relationship between IQ, parental SES, race, gender, and poverty rates in the NLSY 1979 data. The IQ variable is calculated using normalized AFQT results, the SES variable is calculated by normalizing reported parental income, and the Age variable is calculated by normalizing age, so each variable has a mean of 0 and standard deviation of 1. Hisp, White, and Male are all dummy variables for whether or not an individual is Hispanic, white, and male, respectively, with 1 meaning yes and 0 meaning no. IQ*White, SES*White, IQ*Male, and SES*Male are interaction terms for being white and being male with the main poverty determinants we are observing throughout this essay. The dependent variable in all regressions is the probabilty of being in poverty using poverty status as of 1989 from the NLSY data.}")
+```
+
+```{r, results='asis'}
+stargazer(wht_mod, 
+          blk_mod, 
+          hisp_mod,
+          male_mod,
+          female_mod,
+          all_mod,
+          type = "latex",
+          title = "Regression of Poverty on IQ, SES and Age",
+          column.labels = c("White", "Black", "Hispanic", "Male", "Female", "All"),
+          covariate.labels = c("IQ", "SES", "Age"),
+          header = FALSE,
+          notes = "\\parbox[t]{14cm}{This table reports regression results for multiple logit regressions observing the effect of IQ and parental SES on poverty rates in the NLSY 1979 data. Regression 1 is an identical regression to that performed by Charles Murray and Richard Herrnstein on page 596 in Appendix 4 of *The Bell Curve*. We restrict the data used for these regressions first to include only respondents from a given affinity group, and then further to only contain respondents from the main cross section to mirror Murray and Herrnstein's methodology. The IQ variable is calculated using normalized AFQT results, the SES variable is calculated by normalizing reported parental income, and the Age variable is calculated by normalizing age; each variable has a mean of 0 and standard deviation of 1. The dependent variable in all regressions is the probabilty of being in poverty using poverty status as of 1989 from the NLSY data.}")
+```
+
+  The results of the previously described regressions can be found in Tables 5 and 6.[^13] Table 5 shows a comparison of multi-race/multi-gender regressions with interaction terms and dummy variables, while Table 6 compares regressions for each individual affinity group. Within table 5, we can see in regression 1 that, since the value for the white dummy variable is negative, whites are at an advantage over black respondents at all levels, since the constant is more negative than that for blacks. The interaction terms are not statistically significant, so we cannot draw any conclusions from the regression over whether or not IQ and parental socioeconomic status could hold a different weight for black respondents and white respondents in determining poverty status. Regression 2 shows that each dummy/interaction term is not significant, but is negative in all cases, again implying that we cannot draw conclusions over whether or not Hispanics could be disadvantaged at all values (due to the dummy variable) and be less affected by changes in IQ and parental socioeconomic status than whites (due to the negative interaction terms). Regression 3 depicts that across all individuals, the negative coefficient on the white dummy variable remains significant, so society confers an advantage against being in poverty on white individuals over minority individuals. Regression 4 looks at the relationship between genders, showing that there is a statistically significant advantage associated with being male in poverty outcomes. Tangentially, regression 6 shows significant negative coefficients on both the white and male dummy variables, showing that in the total sample, whites and males have lower rates of poverty at all levels of IQ and parental socioeconomic status.
+  
+  The first column of table 6, in which we describe the effects of IQ, parental socioeconomic status, and age on poverty for white respondents, is, in essence, a direct replication of Murray and Herrnstein's regression in appendix 4 of *The Bell Curve* (pg. 596). His coefficients are -2.47, -0.84, -0.33, and -0.02 for the constant, zIQYr89, zSES, and zAge, respectively, while ours are -2.65, -0.82, -0.33, -0.14--numbers which align with the exception of the coefficient on zAge. Given the similarities between our regression results and the published results, we can extrapolate that our experimental methods are sound by the standards Murray and Herrnstein employ, and thus the rest of our analysis must be considered valid.
+  
+  The general trend shown in regression 1 remains consistent across racial and gender groups--the coefficient on zIQYr89 is definitely larger in magnitude than the coefficient on zSES, and the coefficient on age is still smaller than zAge--but important differences exist. For instance, the coefficient on zIQYr89 for black respondents is less negative than that of whites, but the coefficient for zSES is more negative, and further the constant is smaller. For Hispanic respondents, both primary coefficients (zIQYr 89 and zSES) are far greater in magnitude than those of white respondents, and the constant is more negative as well. On the other hand, the coefficients for males and females on zIQYr89 and zSES are relatively similar, the main difference between these regressions being that the coefficient for females is far smaller in magnitude. We opt to spend little time discussing the results of the regression for all respondents, given in this regression exist the omitted variable biases associated with race, ethnicity, and gender which we circumvent in the other regressions; its numbers are reported primarily for the purpose of comparison/signing the aforementioned biases. Another point of consideration remains that most of our coefficients are statistically significant, minus those for age on regressions 2-4. Each of the next paragraphs will address a specific regression in the chart.
+  
+  Comparing the regression for all respondents to each individual affinity group regression, we can sign the bias associated with being an in-group individual for each independent variable. The general coefficients for each variable are -0.89, -0.39, -0.11, and -2.56 for zIQYr89, zSES, zAge, and the constant, respectively. Comparing this to the regression for whites, we see that it overestimates the explanatory effect of IQ and parental socioeconomic status, but underestimates the effect of age. Furthermore, it underestimates the positive effect on not falling below poverty at all levels of IQ/SES/Age as evidenced by the difference in constants. Comparing it to the regression for blacks, the regression overestimates the effect of IQ, but underestimates the explanatory effects SES and age as well as the disadvantage at all levels shown in the constants. For Hispanics, the original regression overestimates the effects of age, but underestimates the effect IQ holds on probability of falling into poverty as well as the positive effect at all levels described in the regression for white respondents. Male respondents would have an overestimated coefficient on SES and age, but an underestimated coefficient for IQ and for the positive effect on not falling below poverty at all levels of IQ/SES/Age shown through the constants. For female respondents, the coefficient on SES is overestimated, but the coefficients on IQ and age are underestimated. Furthermore, the negative effect at all levels associated with being a female increasing the likelihood of falling below the poverty line is underestimates.
+
+```{r, fig.cap="The National Longitudinal Survey of Youth (1979) includes data on 3,367 individuals, in its main cross section, who are white and not currently in school. Replicating the proceedures in The Bell Curve, we perform a logit regression of poverty status in 1989 against age, IQ and SES. IQ is based on AFQT scores, adjusted for age and skew, and is blue in this graph. SES is based on parental income, education and occupation, and is red in this graph. Both are calculated as z scores. For each individual line, other variables (i.e. zSES and zAge for zIQYr89) are set at their mean values. The graph's axes extend from a z-score of -3 to 3 on the y axis, and a probability level of 0 to 1 on the y axis.", fig.width= 5, fig.height = 3}
+## White
+ggplot(data = wht_data) +
+  geom_smooth(aes(x = zSES, y = pred.ses), color = "red", method = "loess") +
+  geom_smooth(aes(x = zIQYr89, y = pred.iq), color = "blue", method = "loess") +
+  ylab("Probability of Being in Poverty in 1989") +
+  xlab("Standard Score for IQ (Blue) or for Parents' SES (Red)") +
+  ggtitle("Figure 1: Relationship Between IQ or Parents' Socioeconomic Status and Poverty (White)") +
+  theme(plot.title = element_text(size = 8)) + 
+  coord_cartesian(xlim = c(-3, 3),
+                  ylim = c(0, 1))
+```
+
+  Moving from focusing the discussion on the regression table to the graphs, we can begin to visually interpret the differences in explanatory power and magnitude of effect of parental SES and IQ on an individual's probability of falling into poverty. Figure 1 is a replication of the actual graphic published by Murray and Herrnstein on page 134 of *The Bell Curve*. In essence, the blue line asks the question "for a white individual of exactly average age and average parental socioeconomic status, how does his or her IQ affect his or her probability of being in poverty?" The red line asks the same question, only flipping the position of parental socioeconomic status and IQ, and figures 2-6 ask the same two questions for only black, Hispanic, male, female, and all respondents. We can see that across all the figures, the relationship shown by Murray and Herrnstein persists--that is to say that, at the lower end of the spectrum, having a relatively low IQ is a stronger predictor of being in poverty than being from a family with a low socioeconomic status. These conclusions are consistent with both the argument made by the authors in chapter 5 as well as the results of the regressions in table 3. That being said, just as in the discussion of the regression results, it is important to explore differences across racial, ethnic, and gender groups as evidenced by the graphics.
+
+```{r, fig.width= 5, fig.height = 3, fig.cap = "This graph contains trend lines for the logit regression of z-scored parental socioeconomic status, IQ and age on probability of being in poverty. This graph focuses on the parental socioeconomic status variable. The data comes from the main cross section of the National Longitudinal Study of Youths in 1979. The parental socioeconomic status variable is normalized so that it has a mean of 0 and standard deviation of 1, and all other variables in the data original logit regression (age and IQ) are set to their mean values. IQ is calculated using the AFQT exam from 1989, given in *The Bell Curve* this is how Murray and Herrnstein calculate their IQ distributions. The red line is for white respondents, blue line is for black respondents, green line is for hispanic respondents, yellow line is for male respondents, and orange line is for female respondents. The white, black, Hispanic, male, and female data sets contain 3,367, 492, 278, 2,088, and 2,277 observations, respectively. The graph's axes extend from a z-score of -3 to 3 on the y axis, and a probability level of 0 to 1 on the y axis."}
+## Graph for all SES
+
+ggplot() +
+  geom_smooth(data = wht_data, aes(x = zSES, y = pred.ses), color = "red", method = "loess") +
+  geom_smooth(data = blk_data, aes(x = zSES, y = pred.ses), color = "blue", method = "loess") +
+  geom_smooth(data = hisp_data, aes(x = zSES, y = pred.ses), color = "green", method = "loess") +
+  geom_smooth(data = male_data, aes(x = zSES, y = pred.ses), color = "yellow", method = "loess") +
+  geom_smooth(data = female_data, aes(x = zSES, y = pred.ses), color = "orange", method = "loess") +
+  ylab("Probability of Being in Poverty in 1989") +
+  xlab("Standard Score for Parents' SES") +
+  ggtitle("Figure 2: Relationship Between Parents' Socioeconomic Status and Poverty") +
+  theme(plot.title = element_text(size = 8),
+        axis.title.x = element_text(size = 8),
+        axis.title.y = element_text(size = 8)) + 
+  coord_cartesian(xlim = c(-3, 3),
+                  ylim = c(0, 1))
+```
+
+```{r, fig.width= 5, fig.height = 3, fig.cap = "This graph contains trend lines for the logit regression of z-scored parental socioeconomic status, IQ and age on probability of being in poverty. This graph focuses on the IQ variable. The data comes from the main cross section of the National Longitudinal Study of Youths in 1979. The IQ variable is normalized so that it has a mean of 0 and standard deviation of 1, and all other variables in the data original logit regression (age and IQ) are set to their mean values. IQ is calculated using the AFQT exam from 1989, given in *The Bell Curve* this is how Murray and Herrnstein calculate their IQ distributions. The red line is for white respondents, blue line is for black respondents, green line is for hispanic respondents, yellow line is for male respondents, and orange line is for female respondents. The white, black, Hispanic, male, and female data sets contain 3,367, 492, 278, 2,088, and 2,277 observations, respectively. The graph's axes extend from a z-score of -3 to 3 on the y axis, and a probability level of 0 to 1 on the y axis."}
+## Graph for all Cognitive Class
+
+ggplot() +
+  geom_smooth(data = wht_data, aes(x = zIQYr89, y = pred.iq), color = "red", method = "loess") +
+  geom_smooth(data = blk_data, aes(x = zIQYr89, y = pred.iq), color = "blue", method = "loess") +
+  geom_smooth(data = hisp_data, aes(x = zIQYr89, y = pred.iq), color = "green", method = "loess") +
+  geom_smooth(data = male_data, aes(x = zIQYr89, y = pred.iq), color = "yellow", method = "loess") +
+  geom_smooth(data = female_data, aes(x = zIQYr89, y = pred.iq), color = "orange", method = "loess") +
+  ylab("Probability of Being in Poverty in 1989") +
+  xlab("Standard Score for IQ") +
+  ggtitle("Figure 3: Relationship Between IQ and Poverty") +
+  theme(plot.title = element_text(size = 10),
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 10)) + 
+  coord_cartesian(xlim = c(-3, 3),
+                  ylim = c(0, 1))
+```
+
+## Black Respondents
+
+  As stated earlier, the coefficients on the three variables, while similar, are not the same between black and white individuals. The coefficient on a white individuals zIQYr89 is -0.82, while that for black individuals is -0.73. Due to the nature of logit regressions, providing a precise comparison of an equal change in IQ z-score between white and black individuals is complicated and changes depending on the initial z-score, but regardless a given increase in relative IQ for a white individual will have a larger effect on mitigating the probability of being in poverty than an equal change for an identical black individual. Also, because the magnitude of the coefficient on zSES for blacks is larger than that for whites (-0.40 vs. -0.33), a given improvement in parental socioeconomic status for a black individual will have a greater effect on lowering the probability of falling under the poverty line than an equal improvement for an identical white individual. The final, and perhaps most interesting, conclusion we can draw from a comparison of the two regressions is that the constant for white respondents is -2.65, while that of black respondents is -1.97. This difference suggests that regardless of whether we focus on IQ or parental socioeconomic status, black respondents have a higher probability of being in poverty than white respondents, showing that blacks being overrepresented in the population below the poverty line is due to a factor other than IQ or parental socioeconomic status such as societal biases or discriminatory practices.
+
+  Comparing figures 2 and 3, we can see an enormous difference in the shape of the relationship between the dependent variables and probability of being in poverty for white and black individuals. While all four lines are downward sloping, have upward concavity, and begin at a higher probability for IQ than for parental socioeconomic status, there are glaring differences. For instance, even at the lowest z-scores for both IQ and SES, white individuals have roughly a 50% likelihood of being below the poverty line, a number very different from the roughly 70% likelihood for black respondents. The differential between likelihood of being in poverty at the upper end of both spectrums, while smaller, still exists, showing that at all levels, a white person of a given relative age, IQ, and parental socioeconomic status to their peers benefit from some advantage that a black person does not receive. Furthermore, we see that the point at which the trendlines for zSES and zIQYr89 cross is at a lower z-score for blacks than whites, suggesting further that the effect of IQ/parental socioeconomic status on a white person's probability of being in poverty is not the same as the effect for a black person.
+
+## Hispanic Respondents
+
+  Moving on from comparing the regressions for black and white individuals, we can compare the regression for Hispanic respondents. Performing the same comparisons as above, the coefficient on zIQYr89 for Hispanic individuals is -1.10, 0.28 larger than that of non-Hispanic whites, suggesting that a given improvement in relative IQ for a Hispanic individual has a greater decrease on probability of falling below the poverty line than for a non-Hispanic white person. Similarly, the coefficient on zSES for Hispanic respondents is -0.39, 0.07 units more negative than that of white respondents, suggesting the same relationship exists between Hispanic and non-Hispanic whites for changes in parental socioeconomic status as between Hispanic and non-Hispanic whites for changes in IQ. Finally, in observing the constants, we see that Hispanic respondents' -2.83 is very similar to white respondents' -2.65. This suggests that for Hispanic individuals with negative IQ or parental socioeconomic status z-scores, the probability of being in poverty is higher than the probability for non-Hispanic whites of the same IQ/parental socioeconomic status.
+
+  Looking at figures 2 and 3, however, the differences between the whites and Hispanics is of a very different nature than that between whites and blacks. For white and Hispanic respondents the general shape and location on the graph of the line for parental socioeconomic status is very similar. Both are around a 50% probability for the lowest end of the spectrum and >5% for the highest end of the spectrum and have remarkably similar concavities. The lines for the effect of IQ, however, are far different. While a white person at the lower end of the IQ spectrum has a probability of being in poverty of roughly 50%, a Hispanic person at the same position has a probability of roughly 80%. Also, the concavity of the line for Hispanics is far lower, given it intersects the SES curve at roughly the same point as the IQ curve for whites intersects its corresponding SES curve. This suggests that, within the Hispanic community, IQ is a far stronger determinant of poverty than it is within both the white and black communities in America.
+
+## Gender Differences
+
+  With the discussion of Hispanic respondents concluding the examination of race, we can now move on to looking at gender differences in the relationship between IQ/parental socioeconomic status on probability of falling below the poverty line. On both major variables, the differences between coefficients across genders are negligible: The coefficient on zIQYr89 is -0.92 for males while it is -0.96 for females, and the coefficient on zSES is -0.39 for males while it is -0.37 for females. Comparing these coefficients shows there is little to no difference across genders in the effect of a given change in z-score of either variable for two otherwise identical individuals. That being said, like the difference in the constant for black and white individuals, the constant for the female regression is far smaller in magnitude than that for the male regression: -2.27 vs. -3.02. This again suggests that for a male and female of identical negative IQ/parental socioeconomic status z-score, the female while have a higher likelihood of falling below the poverty line. These findings suggest that differences in poverty rates between males and females is due to variables that are not IQ or parental socioeconomic status, variables that could include gender-based discrimination or implicit sexist institutions.
+
+  Comparing lines within figures 2 and 3, we are able to explore the visual representation of the impact gender has on the relationships previously explored. Upon first inspection, the most obvious difference between the two graphs occurs, as between white and black respondents, at the leftmost end of both curves. For males at the lowest end of the SES distribution, the probability of being in poverty is roughly 50%, while for equivalent females the probability jumps to about 65%. Similarly, for males at the lowest end of the IQ distribution, the probability of being in poverty is roughly 60%, while females at the same end of the distribution have a probability of around 80%. Furthermore, the curves for women are higher than the curves for men, suggesting that at all levels across both determinants, women are more likely than men to be in poverty. These stark differences suggest differing poverty rates between genders must be attributable to factors not included in this regression, certainly not relative IQ or parental socioeconomic status.
+
+# Conclusion
+
+  Drawing from both a statistical analysis of the regression results and visual inspection of the regression curves, the relative importance of IQ over parental socioeconomic status in determining poverty rates is undeniable. That being said, Herrnstein and Murray's assumption that they can translate the results they found for white respondents to those of other races is fundamentally flawed as it overlooks two cornerstone principles of statistics: that results cannot be translated to points outside of the data set and that omitted variable bias (such as inherent advantages given to members of certain racial/ethnic/gender groups) skews coefficients. The analysis in the preceding section provides a comprehensive analysis of how the data across groups differs while also providing potential explanations for why, in specific cases, the authors could not extrapolate from their results to model the relationships for black, Hispanic, male, and female groups.
+
+  Our analysis proves, as hypothesized, that distinct relationships exist within in-groups in the data, and Murray and Herrnstein's projection of their findings for white survey participants onto other groups is simultaneously erroneous and unfounded. We found a significantly stronger relationship between IQ and poverty for Hispanics, males, and females and a significantly weaker relationship for blacks than the sample's whites. Further, the relationship between parental socioeconomic status and poverty is underestimated for all the unexplored groups: black, Hispanic, male, and female. The original regression used in the book also underestimates the negative effects prevalent at all levels of IQ and parental socioeconomic status for black and female individuals and underestimates the positive effects at all levels associated with being male. By overestimating the breadth of statistical relevance of their regression results, the authors overlook and fail to see how the relationship between IQ/parental SES differs across groups and thus omit an exploration of potential causes for these differences.
+  
+  These differences can be attributed to any number of things, but, given the most significant differences between the regression coefficients for white people and black or Hispanic people adversely affect these groups, it is reasonable to assume that, at least in part, these differences can be attributable to latent vestiges of racism and discriminatory practices hidden under the guise of something else. In the same vein, the differences between coefficients on male and female participants show that women at all levels are socioeconomically disadvantaged, suggesting that similar implicit sexism or cultural biases against women contribute somewhat to this disadvantage. These assumptions, however, are purely speculative, as the data contains no metric for levels of racism/sexism within society. Further readings exploring the relationship between race and poverty and the effectiveness of current policy regarding economic outcomes can be found in Deborah J. Johnson's "Disentangling Poverty and Race"[^14] and Christopher Jencks' *Rethinking Social Policy*[^15]. Dr. Lenora Fulani explored the effects of racism and sexism on women of color in her 1988 collection *The Psychopathology of Everyday Racism and Sexism*[^16], as did Colette Guillaumin in her 1995 book *Racism, Sexism, Power and Ideology*[^17]. Other works such as Kenneth Arrow's "What Has Economics to Say About Racial Discrimination?"[^18], Devah Pager's "The Sociology of Discrimination"[^19], and Jessica Schieder and Elise Gould's 2016 Economic Policy Institute report[^20] find substantial evidence of discrimination on the basis of race and gender in economic outcomes.
+  
+  That being said, this work by no means explores all there is to explain regarding the relationship between IQ, parental socioeconomic status, and poverty. The data is from nearly three decades ago, so societal forces driving some of these patterns may have changed or disappeared altogether. The survey, also, didn't allow respondents to identify as Asian within the race category, so a newer survey with newer data and more categories could further explore the relationship as it exists across cultural, racial and ethnic groups. Furthermore, the main cross section of the data contains limited numbers for Hispanic and black respondents as shown in the different magnitudes of the observations in table 6. Disentangling the effects of race and gender even further, one could use newer, larger datasets to perform a comprehensive analysis of individual gender groups within race groups--by for instance, comparing white males, white females, black males, black females, etc.--to gain stronger insight into how these variables do affect an individual differently due to factors associated with these identities. Furthermore, using a metric to identify levels of race-based and gender-based discrimination within a society, one could then use panel data to examine the way relative importance of IQ and parental SES change as levels of discrimination change.
+  
+  Still, our analysis provides conclusive evidence that the relationship between parental socioeconomic status/IQ and poverty differes across identity groups. The summary statisitcs show that parental SES had three times the predictive power as SES for black respondents and twice the predictive power for Hispanic respondents over whites, with numbers showing a greater proportion of respondents in poverty at all levels for minority groups than for white respondents. This relationship also holds between women and men, suggesting something other than IQ or parental SES must be driving the differences in poverty rates across the observed affinity groups.
+  
+\pagebreak
+
+## Bibliography
+
+[^1]: @aj69
+[^2]: @rh71
+[^3]: @HM94
+[^4]: @gm95
+[^5]: @tr00
+[^6]: @t03
+[^7]: @ms02
+[^8]: @c12
+[^9]: @c95
+[^10]: @mm04
+[^11]: https://www.nlsinfo.org/content/cohorts/nlsy79/topical-guide
+[^12]: http://www.rasmusen.org/xpacioli/bellcurve/bellcurve.htm
+[^13]: tables created using R package stargazer, @h18
+[^14]: @j00
+[^15]: @j92
+[^16]: @f88
+[^17]: @g95
+[^18]: @a98
+[^19]: @ps08
+[^20]: @sg16
